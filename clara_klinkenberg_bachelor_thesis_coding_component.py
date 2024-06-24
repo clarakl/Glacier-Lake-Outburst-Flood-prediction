@@ -10,9 +10,11 @@ Original file is located at
 # Parts of the code that have been taken over from Christian Kienholz as-is or in an adapted form are marked as following:
 
 #-----------------------------------
+# Start
 #
 #         CODE
 #
+# End
 #-----------------------------------
 
 # These parts still might still have gone through change, but the framework stayed like the original
@@ -30,7 +32,8 @@ import os
 path = '/content/drive/MyDrive/Academia/Tilburg university/2023-2024/Bachelor thesis/Data'
 os.chdir(path)
 
-#  -------------------------------------------
+#-------------------------------------------
+# Start
 
 
 # Pre-processing of data before 2019
@@ -181,9 +184,6 @@ def annotatefun(ax, textlist, xstart, ystart, ydiff=0.05, fonts=12, col='k', ha=
 def digit_formatter(inputnumber, digits):
     return ("{0:0.%sf}"%(digits)).format(round(inputnumber, digits) + 0.0)
 
-# ---------------------------------------------------
-
-#----------------------------------------------------
 
 import pandas as pd
 import numpy as np
@@ -321,9 +321,6 @@ def calc_suicide_volume(start_height, end_height):
     volume /= 1000**3
     return volume
 
-#------------------------------------------------------------------
-
-#------------------------------------------------------------------
 
 import urllib.request
 import json
@@ -715,6 +712,7 @@ class Mendenhall_Lake_GLOF_Model(Mendenhall_Lake_GLOF_Model_Parameters):
 
             return series_concat_reduced_rm
 
+# End
 # ------------------------------------------------------------------
 
     def forecast_outflow_univariate_prophet(self):
@@ -736,51 +734,80 @@ class Mendenhall_Lake_GLOF_Model(Mendenhall_Lake_GLOF_Model_Parameters):
         train_data = df[df['ds'] < split_date]
         test_data = df[df['ds'] >= split_date]
 
+        # Grid search setup
+        param_grid = {
+                  'changepoint_prior_scale': [0.01, 0.1, 0.5],
+                  'n_changepoints': [20, 25, 30],
+                  'changepoint_range': [0.8, 0.9, 0.95],
+        }
 
-        # Model without regressor
-        model_no_reg = Prophet()
-        model_no_reg.fit(train_data)
+        # Generate all combinations of parameters
+        all_params = [dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())]
+        best_score = float('inf')
+        best_params = None
 
-        # Create a future dataframe for predictions
-        future = model_no_reg.make_future_dataframe(periods=len(test_data), freq = "h")
+        for index, params in enumerate(all_params):
+          m = Prophet(changepoint_prior_scale=params['changepoint_prior_scale'],
+                      n_changepoints = params['n_changepoints'],
+                      changepoint_range=params['changepoint_range'],)
+          m.fit(train_data)
+          future = m.make_future_dataframe(periods=len(test_data), freq='H')
+          fcst = m.predict(future)
 
-        # Predict without regressor
-        forecast_no_reg_train = model_no_reg.predict(train_data)
-        forecast_no_reg_test = model_no_reg.predict(test_data)
+          # Calculate metrics
+          mae = mean_absolute_error(test_data['y'], fcst[-len(test_data):]['yhat'])
+          mse = mean_squared_error(test_data['y'], fcst[-len(test_data):]['yhat'])
+          rmse = np.sqrt(mse)
+          r2 = r2_score(test_data['y'], fcst[-len(test_data):]['yhat'])
 
-        # Calculate performance metrics
-        def calculate_metrics(true_values, predictions):
-            mae = mean_absolute_error(true_values, predictions)
-            mse = mean_squared_error(true_values, predictions)
-            rmse = np.sqrt(mse)
-            r2 = r2_score(true_values, predictions)
-            return mae, mse, rmse, r2
+          score = mse  
 
-        # Training metrics
-        mae_no_reg_train, mse_no_reg_train, rmse_no_reg_train, r2_no_reg_train = calculate_metrics(train_data['y'], forecast_no_reg_train['yhat'])
+          if score < best_score:
+              best_score = score
+              best_params = params
+              best_forecast = fcst
 
-        # Test metrics
-        mae_no_reg_test, mse_no_reg_test, rmse_no_reg_test, r2_no_reg_test = calculate_metrics(test_data['y'], forecast_no_reg_test['yhat'])
+          print(f"Gridsearch {index + 1} of {len(all_params)} with params {params} done. Current best score: {best_score}")
 
-        # Print the results
-        print("Without Regressor:")
-        print(f"Training MAE: {mae_no_reg_train:.3f}, MSE: {mse_no_reg_train:.3f}, RMSE: {rmse_no_reg_train:.3f}, R-squared: {r2_no_reg_train:.3f}")
-        print(f"Test MAE: {mae_no_reg_test:.3f}, MSE: {mse_no_reg_test:.3f}, RMSE: {rmse_no_reg_test:.3f}, R-squared: {r2_no_reg_test:.3f}")
+        # Refit model with the best parameters
+        best_model = Prophet(changepoint_prior_scale=params['changepoint_prior_scale'],
+                        n_changepoints = params['n_changepoints'],
+                        changepoint_range=params['changepoint_range'],)
+        best_model.fit(train_data)
 
-        # Plot training set predictions
+        print('Best Parameters:', best_params)
+        print(f'Best Scores: MAE: {mae:.3f}, MSE: {mse:.3f}, RMSE: {rmse:.3f}, R2: {r2:.3f}')
+
+        # Plot test set predictions 
         plt.figure(figsize=(14, 7))
-
-        # Plot test set predictions
-        plt.subplot(2, 1, 2)
-        plt.plot(test_data['ds'], test_data['y'], label='Actual')
-        plt.plot(test_data['ds'], forecast_no_reg_test['yhat'], label='Predictions')
-        plt.title('Test Set')
-        plt.legend()
-
+        plt.plot(test_data['ds'], test_data['y'], 'b-', label='Actual')
+        plt.plot(test_data['ds'], best_forecast[-len(test_data):]['yhat'], 'r--', label='Predicted')
+        plt.title('Test Set Predictions', fontsize=14)
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Outflow', fontsize=12)
+        plt.legend(fontsize=12)
+        plt.xticks(fontsize=10)
+        plt.yticks(fontsize=10)
         plt.tight_layout()
         plt.show()
 
-        return forecast_no_reg_test
+        # Create future dataframe for predictions
+        future_data = best_model.make_future_dataframe(periods=4400, freq='h')
+
+        # Predict using the model
+        forecast_data = best_model.predict(future_data)
+
+        forecast_data[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(5)
+
+        forecast_data.set_index('ds', inplace=True)
+        forecast_data = pd.Series(forecast_data["yhat"], index=forecast_data.index)
+
+        # Save the forecast DataFrame as a pickle file
+        with open('multivariate_forecast_outflow_prophet.pickle', 'wb') as f:
+            pickle.dump(forecast_data, f)
+            print("multivariate_forecast_outflow_prophet.pickle successfully saved")
+
+        return forecast_data
 
 
     def forecast_outflow_multivariate_prophet(self, inflow_data):
@@ -789,7 +816,6 @@ class Mendenhall_Lake_GLOF_Model(Mendenhall_Lake_GLOF_Model_Parameters):
         # The mutlivariate version of Prophet will run through multiple Monte Carlo runs
         # That would be too much output
         # Once the Monte carlo runs are finished, the mean values for the metrics will be printed.
-
 
 
         # Prepare the data for Prophet
@@ -815,22 +841,91 @@ class Mendenhall_Lake_GLOF_Model(Mendenhall_Lake_GLOF_Model_Parameters):
         df['inflow_y'].fillna(method='ffill', inplace=True)  # Forward fill NaN values
         df['inflow_y'].fillna(method='bfill', inplace=True)  # Backward fill NaN values
 
+        # Define the split date
+        split_date = '2020-04-01 00:00:00'
 
-        # Initialize the Prophet model and add the regressor
-        model = Prophet(uncertainty_samples=100)
-        model.add_regressor('inflow_y')
+        # Split the data into training and test sets
+        train_data = df[df['ds'] < split_date]
+        test_data = df[df['ds'] >= split_date]
 
-        # Fit the model
-        model.fit(df)
+        # Grid search setup
+        param_grid = {
+           'changepoint_prior_scale': [0.01, 0.1, 0.5],
+            'n_changepoints': [20, 25, 30],
+            'changepoint_range': [0.8, 0.9, 0.95],
+            # 'seasonality_prior_scale': [0.1, 1.0, 10.0],
+            # 'seasonality_mode': ['additive', 'multiplicative']
+        }
+
+        # Generate all combinations of parameters
+        all_params = [dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())]
+        best_score = float('inf')
+        best_params = None
+
+        for index, params in enumerate(all_params):
+          m = Prophet(uncertainty_samples=100,
+                      changepoint_prior_scale=params['changepoint_prior_scale'],
+                      n_changepoints = params['n_changepoints'],
+                      changepoint_range=params['changepoint_range'],)
+          m.add_regressor('inflow_y')
+          m.fit(train_data)
+          future = m.make_future_dataframe(periods=len(test_data), freq='H')
+          # Merge the future dataframe with inflow data
+          future = pd.merge(future, inflow_data, on='ds', how='left')
+
+          # Ensure there are no missing values in 'inflow_y'
+          future['inflow_y'].fillna(method='ffill', inplace=True)
+          future['inflow_y'].fillna(method='bfill', inplace=True)
+
+          fcst = m.predict(future)
+
+          # Calculate metrics
+          mae = mean_absolute_error(test_data['y'], fcst[-len(test_data):]['yhat'])
+          mse = mean_squared_error(test_data['y'], fcst[-len(test_data):]['yhat'])
+          rmse = np.sqrt(mse)
+          r2 = r2_score(test_data['y'], fcst[-len(test_data):]['yhat'])
+
+          score = mse  # You can change the scoring rule depending on which metric you prioritize
+
+          if score < best_score:
+              best_score = score
+              best_params = params
+              best_forecast = fcst
+
+          print(f"Gridsearch {index + 1} of {len(all_params)} with params {params} done. Current best score: {best_score}")
+
+        # Refit model with the best parameters
+        best_model = Prophet(uncertainty_samples=100,
+                              changepoint_prior_scale=params['changepoint_prior_scale'],
+                              n_changepoints = params['n_changepoints'],
+                              changepoint_range=params['changepoint_range'],)
+        best_model.add_regressor('inflow_y')
+        best_model.fit(train_data)
+
+        print('Best Parameters:', best_params)
+        print(f'Best Scores: MAE: {mae:.3f}, MSE: {mse:.3f}, RMSE: {rmse:.3f}, R2: {r2:.3f}')
+
+        # Plot test set predictions with larger font
+        plt.figure(figsize=(14, 7))
+        plt.plot(test_data['ds'], test_data['y'], 'b-', label='Actual')
+        plt.plot(test_data['ds'], best_forecast[-len(test_data):]['yhat'], 'r--', label='Predicted')
+        plt.title('Test Set Predictions', fontsize=14)
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Outflow', fontsize=12)
+        plt.legend(fontsize=12)
+        plt.xticks(fontsize=10)
+        plt.yticks(fontsize=10)
+        plt.tight_layout()
+        plt.show()
 
         # Create future dataframe for predictions
-        future_data = model.make_future_dataframe(periods=4400, freq='h')
+        future_data = best_model.make_future_dataframe(periods=4400, freq='h')
         future_data = pd.merge(future_data, inflow_data, how='left', on='ds')
         future_data['inflow_y'].fillna(method='ffill', inplace=True)  # Forward fill NaN values
         future_data['inflow_y'].fillna(method='bfill', inplace=True)  # Backward fill NaN values
 
         # Predict using the model
-        forecast_data = model.predict(future_data)
+        forecast_data = best_model.predict(future_data)
 
         # Step 1: Identify the overlapping period
         actual_end_date = df['ds'].max()  # The last timestamp of your actual data
@@ -893,124 +988,15 @@ class Mendenhall_Lake_GLOF_Model(Mendenhall_Lake_GLOF_Model_Parameters):
         forecast_data = pd.Series(forecast_data["yhat"], index=forecast_data.index)
 
         # Save the forecast DataFrame as a pickle file
-        with open('forecast_outflow_prophet.pickle', 'wb') as f:
+        with open('multivariate_forecast_outflow_prophet.pickle', 'wb') as f:
             pickle.dump(forecast_data, f)
-            print("forecast_outflow_prophet.pickle successfully saved")
+            print("multivariate_forecast_outflow_prophet.pickle successfully saved")
 
         return forecast_data
 
-
-
-    def overfit_analysis(self, inflow_data):
-
-        print("-------------------------")
-        print("OVERFIT ANALYSIS")
-
-        # Prepare the data for Prophet
-        df = full_data[["datetime", "outflow"]]
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        df = df.rename(columns={"datetime": "ds", "outflow": "y"})
-        df.dropna(inplace=True)
-        df.set_index('ds', inplace=True)
-        df = df.resample('h').mean()
-        df['y'] = df['y'].clip(lower=0)
-        df.reset_index(inplace=True)
-
-        # Prepare regressor
-        # Ensure inflow_data has the right format
-        inflow_data = inflow_data.rename("inflow_y")
-        inflow_data = inflow_data.reset_index().rename(columns={"datetime": "ds"})
-        inflow_data = inflow_data.dropna()  # Drop NaN values in inflow_data
-
-        # Merge df with inflow data to include inflow_y as a regressor
-        df = pd.merge(df, inflow_data, how='left', on='ds')
-        df['inflow_y'].fillna(method='ffill', inplace=True)  # Forward fill NaN values
-        df['inflow_y'].fillna(method='bfill', inplace=True)  # Backward fill NaN values
-
-        # Save df to a CSV file
-        df.to_csv('overfit_analysis_df.csv', index=False)
-        print("DataFrame saved to overfit_analysis_df.csv")
-
-        # Define the split date
-        split_date = '2020-04-01 00:00:00'
-
-        # Split the data into training and test sets
-        train_data = df[df['ds'] < split_date]
-        test_data = df[df['ds'] >= split_date]
-
-
-        # Model without regressor
-        model_no_reg = Prophet()
-        model_no_reg.fit(train_data)
-
-        # Model with regressor
-        model_with_reg = Prophet()
-        model_with_reg.add_regressor('inflow_y')
-        model_with_reg.fit(train_data)
-
-        # Create a future dataframe for predictions
-        future = model_no_reg.make_future_dataframe(periods=len(test_data), freq = "h")
-
-        # Add the regressor to the future dataframe for the model with regressor
-        future_with_reg = future.copy()
-        future_with_reg['inflow_y'] = test_data['inflow_y']
-
-        # Predict without regressor
-        forecast_no_reg_train = model_no_reg.predict(train_data)
-        forecast_no_reg_test = model_no_reg.predict(test_data)
-
-        # Predict with regressor
-        forecast_with_reg_train = model_with_reg.predict(train_data)
-        forecast_with_reg_test = model_with_reg.predict(test_data)
-
-        # Calculate performance metrics
-        def calculate_metrics(true_values, predictions):
-            mae = mean_absolute_error(true_values, predictions)
-            mse = mean_squared_error(true_values, predictions)
-            rmse = np.sqrt(mse)
-            r2 = r2_score(true_values, predictions)
-            return mae, mse, rmse, r2
-
-        # Training metrics
-        mae_no_reg_train, mse_no_reg_train, rmse_no_reg_train, r2_no_reg_train = calculate_metrics(train_data['y'], forecast_no_reg_train['yhat'])
-        mae_with_reg_train, mse_with_reg_train, rmse_with_reg_train, r2_with_reg_train = calculate_metrics(train_data['y'], forecast_with_reg_train['yhat'])
-
-        # Test metrics
-        mae_no_reg_test, mse_no_reg_test, rmse_no_reg_test, r2_no_reg_test = calculate_metrics(test_data['y'], forecast_no_reg_test['yhat'])
-        mae_with_reg_test, mse_with_reg_test, rmse_with_reg_test, r2_with_reg_test = calculate_metrics(test_data['y'], forecast_with_reg_test['yhat'])
-
-        # Print the results
-        print("Without Regressor:")
-        print(f"Training MAE: {mae_no_reg_train:.3f}, MSE: {mse_no_reg_train:.3f}, RMSE: {rmse_no_reg_train:.3f}, R-squared: {r2_no_reg_train:.3f}")
-        print(f"Test MAE: {mae_no_reg_test:.3f}, MSE: {mse_no_reg_test:.3f}, RMSE: {rmse_no_reg_test:.3f}, R-squared: {r2_no_reg_test:.3f}")
-
-        print("\nWith Regressor:")
-        print(f"Training MAE: {mae_with_reg_train:.3f}, MSE: {mse_with_reg_train:.3f}, RMSE: {rmse_with_reg_train:.3f}, R-squared: {r2_with_reg_train:.3f}")
-        print(f"Test MAE: {mae_with_reg_test:.3f}, MSE: {mse_with_reg_test:.3f}, RMSE: {rmse_with_reg_test:.3f}, R-squared: {r2_with_reg_test:.3f}")
-
-        # Plot training set predictions
-        plt.figure(figsize=(14, 7))
-
-        plt.subplot(2, 1, 1)
-        plt.plot(train_data['ds'], train_data['y'], label='Actual')
-        plt.plot(train_data['ds'], forecast_no_reg_train['yhat'], label='No Regressor')
-        plt.plot(train_data['ds'], forecast_with_reg_train['yhat'], label='With Regressor')
-        plt.title('Training Set')
-        plt.legend()
-
-        # Plot test set predictions
-        plt.subplot(2, 1, 2)
-        plt.plot(test_data['ds'], test_data['y'], label='Actual')
-        plt.plot(test_data['ds'], forecast_no_reg_test['yhat'], label='No Regressor')
-        plt.plot(test_data['ds'], forecast_with_reg_test['yhat'], label='With Regressor')
-        plt.title('Test Set')
-        plt.legend()
-
-        plt.tight_layout()
-        plt.show()
-
 # ----------------------------------------------------------
-
+# Start
+    
 
     def mc_calcs(self, water_vol):
 
@@ -1190,6 +1176,7 @@ class Mendenhall_Lake_GLOF_Model(Mendenhall_Lake_GLOF_Model_Parameters):
 
         return self.mc_mae, self.mc_rmse, self.mc_r2, summary_table
 
+# End
 # --------------------------------------------------------------------------------
 
 # Preprocessing for the 2019-2024 data
@@ -1305,6 +1292,7 @@ full_data.index = pd.to_datetime(full_data.index)
 full_data = full_data.sort_index().reset_index().rename(columns={'index': 'datetime'})
 
 # --------------------------------------------------------------
+# Start
 
 def main():
 
@@ -1336,4 +1324,5 @@ if __name__ == "__main__":
 
     main()
 
+# End 
 #-------------------------------------------------------
